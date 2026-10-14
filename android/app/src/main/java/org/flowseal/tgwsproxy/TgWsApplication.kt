@@ -21,10 +21,12 @@ class TgWsApplication : Application() {
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
                 getString(R.string.notif_channel_name),
-                NotificationManager.IMPORTANCE_DEFAULT
+                NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = getString(R.string.notif_running_text)
                 setShowBadge(false)
+                enableVibration(false)
+                setSound(null, null)
             }
 
             val manager = getSystemService(NotificationManager::class.java)

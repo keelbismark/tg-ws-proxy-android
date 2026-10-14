@@ -74,6 +74,8 @@ class NativeProxyRunner(private val context: Context) {
             if (disableFakeTls) {
                 add("-no-faketls")
             }
+            add("-stats-interval")
+            add("5")
         }
 
         try {

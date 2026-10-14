@@ -12,6 +12,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -121,7 +123,9 @@ class TgWsProxyService : Service() {
                 val total = match.groupValues[2].toIntOrNull() ?: 0
                 val upMb = match.groupValues[3].toDoubleOrNull() ?: 0.0
                 val downMb = match.groupValues[4].toDoubleOrNull() ?: 0.0
-                _statsFlow.value = ProxyStats(active, total, upMb, downMb)
+                val newStats = ProxyStats(active, total, upMb, downMb)
+                _statsFlow.value = newStats
+                updateNotification(newStats)
 
                 // High-value periodic traffic heartbeat every 60s if data moved
                 val now = System.currentTimeMillis()
@@ -237,7 +241,26 @@ class TgWsProxyService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
-    private fun buildNotification(port: Int): Notification {
+    private var lastNotifUpdateTime = 0L
+
+    private fun updateNotification(stats: ProxyStats) {
+        if (!_isRunning.value) return
+        val now = System.currentTimeMillis()
+        if (now - lastNotifUpdateTime < 1500L) {
+            return
+        }
+        lastNotifUpdateTime = now
+        try {
+            val notification = buildNotification(currentPort, stats)
+            val manager = NotificationManagerCompat.from(this)
+            manager.notify(NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) {
+            // Notifications may be disabled by the user on Android 13+
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun buildNotification(port: Int, stats: ProxyStats? = null): Notification {
         val openAppIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -264,15 +287,47 @@ class TgWsProxyService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val currentStats = stats ?: _statsFlow.value
+        val hasTraffic = currentStats.total > 0 || currentStats.upMb > 0 || currentStats.downMb > 0
+
+        val contentText = if (hasTraffic) {
+            String.format(
+                java.util.Locale.getDefault(),
+                "↑ %.2f MB   ↓ %.2f MB  •  %d %s",
+                currentStats.upMb,
+                currentStats.downMb,
+                currentStats.active,
+                if (currentStats.active == 1) "соед." else "соед."
+            )
+        } else {
+            "Ожидание трафика • 127.0.0.1:$port"
+        }
+
+        val bigText = buildString {
+            append("Шлюз: 127.0.0.1:$port")
+            if (currentDomain.isNotBlank()) {
+                append(" (маскировка: $currentDomain)")
+            }
+            append("\n")
+            append(String.format(java.util.Locale.getDefault(), "Трафик: ↑ %.2f MB   ↓ %.2f MB\n", currentStats.upMb, currentStats.downMb))
+            append("Соединения: ${currentStats.active} активных (всего: ${currentStats.total})")
+        }
+
         return NotificationCompat.Builder(this, TgWsApplication.NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_shield)
-            .setContentTitle("TG WS Proxy активен")
-            .setContentText("Порт: 127.0.0.1:$port (Шлюз: $currentDomain)")
+            .setColor(ContextCompat.getColor(this, R.color.primary))
+            .setContentTitle("TG WS Proxy • Активен")
+            .setContentText(contentText)
+            .setSubText("127.0.0.1:$port")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
             .setContentIntent(openAppPendingIntent)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .addAction(R.drawable.ic_telegram, getString(R.string.action_connect), connectPendingIntent)
             .addAction(R.drawable.ic_stop, getString(R.string.action_stop), stopPendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 

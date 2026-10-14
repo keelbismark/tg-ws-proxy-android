@@ -78,6 +78,7 @@ class TgWsProxyService : Service() {
     private var lastLoggedUpMb = 0.0
     private var lastLoggedDownMb = 0.0
     private val serviceScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
+    private val timeFormat = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
 
     override fun onCreate() {
         super.onCreate()
@@ -128,7 +129,7 @@ class TgWsProxyService : Service() {
                     lastStatsLogTime = now
                     lastLoggedUpMb = upMb
                     lastLoggedDownMb = downMb
-                    val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(now))
+                    val timeStr = timeFormat.format(java.util.Date(now))
                     _logFlow.tryEmit("[$timeStr] [Статус] Трафик: ↑ %.2f MB, ↓ %.2f MB (активно соединений: %d)".format(upMb, downMb, active))
                 }
                 return@setLogListener // Suppress raw [Stats] noise
@@ -217,7 +218,7 @@ class TgWsProxyService : Service() {
         val lastUpdate = SettingsManager.getLastDomainUpdate(this)
         val now = System.currentTimeMillis()
         if (now - lastUpdate > 24 * 60 * 60 * 1000L) {
-            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            serviceScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val res = SettingsManager.fetchAndRefreshDomains(this@TgWsProxyService)
                 res.onSuccess { count ->
                     LogFormatter.format("Зеркала Cloudflare обновлены: $count активных доменов")?.let { _logFlow.tryEmit(it) }

@@ -426,13 +426,15 @@ func (s *Server) dialFastUpstream(parentCtx context.Context, dcID int, isMedia b
 
 				// Background drain for excess connections
 				go func(winnerIndex int) {
+					timer := time.NewTimer(2 * time.Second)
+					defer timer.Stop()
 					for i := 0; i < len(domains)-1; i++ {
 						select {
 						case extra := <-resultCh:
 							if extra.index != winnerIndex && extra.ws != nil {
 								_ = extra.ws.Close()
 							}
-						case <-time.After(2 * time.Second):
+						case <-timer.C:
 							return
 						}
 					}

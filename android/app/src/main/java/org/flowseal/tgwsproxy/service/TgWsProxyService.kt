@@ -23,6 +23,7 @@ import org.flowseal.tgwsproxy.TgWsApplication
 import org.flowseal.tgwsproxy.core.NativeProxyRunner
 import org.flowseal.tgwsproxy.receiver.ProxyActionReceiver
 import org.flowseal.tgwsproxy.ui.MainActivity
+import org.flowseal.tgwsproxy.util.LogFormatter
 import org.flowseal.tgwsproxy.util.SettingsManager
 
 data class ProxyStats(
@@ -73,6 +74,9 @@ class TgWsProxyService : Service() {
     private var lastVerifyFailTime = 0L
     private var restartAttempts = 0
     private var lastRestartTime = 0L
+    private var lastStatsLogTime = 0L
+    private var lastLoggedUpMb = 0.0
+    private var lastLoggedDownMb = 0.0
     private val serviceScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
 
     override fun onCreate() {
@@ -87,7 +91,9 @@ class TgWsProxyService : Service() {
                 lastRestartTime = now
                 restartAttempts++
                 if (restartAttempts <= 5) {
-                    _logFlow.tryEmit("⚠️ Ядро завершило работу (попытка $restartAttempts/5). Автоперезапуск...")
+                    LogFormatter.format("⚠️ Ядро завершило работу (попытка $restartAttempts/5). Автоперезапуск...")?.let {
+                        _logFlow.tryEmit(it)
+                    }
                     serviceScope.launch {
                         kotlinx.coroutines.delay(1000)
                         if (_isRunning.value && !isStoppingExplicitly) {
@@ -99,14 +105,34 @@ class TgWsProxyService : Service() {
                     }
                     return@setExitListener
                 } else {
-                    _logFlow.tryEmit("❌ Превышен лимит перезапусков ядра.")
+                    LogFormatter.format("❌ Превышен лимит перезапусков ядра.")?.let {
+                        _logFlow.tryEmit(it)
+                    }
                 }
             }
             stopProxy()
             stopSelf()
         }
         runner.setLogListener { line ->
-            _logFlow.tryEmit(line)
+            val match = statsRegex.find(line)
+            if (match != null) {
+                val active = match.groupValues[1].toIntOrNull() ?: 0
+                val total = match.groupValues[2].toIntOrNull() ?: 0
+                val upMb = match.groupValues[3].toDoubleOrNull() ?: 0.0
+                val downMb = match.groupValues[4].toDoubleOrNull() ?: 0.0
+                _statsFlow.value = ProxyStats(active, total, upMb, downMb)
+
+                // High-value periodic traffic heartbeat every 60s if data moved
+                val now = System.currentTimeMillis()
+                if ((upMb > lastLoggedUpMb || downMb > lastLoggedDownMb) && now - lastStatsLogTime > 60000L) {
+                    lastStatsLogTime = now
+                    lastLoggedUpMb = upMb
+                    lastLoggedDownMb = downMb
+                    val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(now))
+                    _logFlow.tryEmit("[$timeStr] 📊 Трафик: ↑ %.2f MB, ↓ %.2f MB (активно соединений: %d)".format(upMb, downMb, active))
+                }
+                return@setLogListener // Suppress raw [Stats] noise
+            }
 
             if (line.contains("Fake TLS verify failed")) {
                 val now = System.currentTimeMillis()
@@ -115,19 +141,14 @@ class TgWsProxyService : Service() {
                 }
                 lastVerifyFailTime = now
                 verifyFailCount++
-                if (verifyFailCount == 3) {
+                if (verifyFailCount == 2) {
                     _secretMismatchFlow.tryEmit(Unit)
-                    _logFlow.tryEmit("⚠️ [ВНИМАНИЕ] Ключ Fake TLS в Telegram не совпадает с ключом прокси! Нажмите «Подключить в Telegram» в приложении.")
                 }
             }
 
-            val match = statsRegex.find(line)
-            if (match != null) {
-                val active = match.groupValues[1].toIntOrNull() ?: 0
-                val total = match.groupValues[2].toIntOrNull() ?: 0
-                val upMb = match.groupValues[3].toDoubleOrNull() ?: 0.0
-                val downMb = match.groupValues[4].toDoubleOrNull() ?: 0.0
-                _statsFlow.value = ProxyStats(active, total, upMb, downMb)
+            val formatted = LogFormatter.format(line)
+            if (formatted != null) {
+                _logFlow.tryEmit(formatted)
             }
         }
     }
@@ -185,7 +206,7 @@ class TgWsProxyService : Service() {
                 return
             }
         } catch (e: Exception) {
-            _logFlow.tryEmit("Ошибка запуска: ${e.message}")
+            LogFormatter.format("Ошибка запуска: ${e.message}")?.let { _logFlow.tryEmit(it) }
         }
         stopProxy()
         stopSelf()
@@ -198,7 +219,7 @@ class TgWsProxyService : Service() {
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                 val res = SettingsManager.fetchAndRefreshDomains(this@TgWsProxyService)
                 res.onSuccess { count ->
-                    _logFlow.tryEmit("Зеркала Cloudflare обновлены: $count активных доменов")
+                    LogFormatter.format("Зеркала Cloudflare обновлены: $count активных доменов")?.let { _logFlow.tryEmit(it) }
                 }
             }
         }

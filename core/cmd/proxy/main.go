@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"os"
@@ -40,7 +39,7 @@ func main() {
 		}
 		if len(list) > 0 {
 			proto.SetCFDomains(list)
-			log.Printf("[Proxy] Dynamic CF gateway domains updated: %d domains", len(list))
+			log.Printf("[Proxy] Loaded %d CF gateway mirrors", len(list))
 		}
 	}
 
@@ -73,13 +72,8 @@ func main() {
 
 	tgLink := cfg.GenerateTelegramProxyLink(host, port)
 
-	fmt.Println("==================================================")
-	fmt.Println("   TG WS Proxy (Go Mobile Core)                 ")
-	fmt.Println("==================================================")
-	fmt.Printf(" Listening on:    %s\n", cfg.ListenAddr)
-	fmt.Printf(" Fake TLS:        %t (SNI: %s)\n", cfg.IsFakeTLS, cfg.FakeTLSDomain)
-	fmt.Printf(" Telegram Link:   %s\n", tgLink)
-	fmt.Println("==================================================")
+	log.Printf("[Proxy] Ready on %s (Fake TLS: %t, SNI: %s)", cfg.ListenAddr, cfg.IsFakeTLS, cfg.FakeTLSDomain)
+	log.Printf("[Proxy] Telegram link: %s", tgLink)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

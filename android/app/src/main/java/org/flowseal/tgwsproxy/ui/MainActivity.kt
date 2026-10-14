@@ -158,7 +158,8 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnClearLogs.setOnClickListener {
             logBuffer.clear()
-            binding.tvLogs.text = "Журнал очищен.\n"
+            val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+            binding.tvLogs.text = "[$time] ℹ️ Журнал очищен.\n"
         }
 
         binding.btnCheckPing.setOnClickListener {
@@ -281,7 +282,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch {
-            TgWsProxyService.logFlow.collectLatest { logLine ->
+            TgWsProxyService.logFlow.collect { logLine ->
                 logBuffer.append(logLine).append("\n")
                 if (logBuffer.length > 40000) {
                     logBuffer.delete(0, 10000)

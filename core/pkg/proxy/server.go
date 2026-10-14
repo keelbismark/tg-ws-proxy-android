@@ -96,7 +96,6 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 	defer relay.GlobalStats.DecConnectionsActive()
 	defer rawConn.Close()
 
-	peer := rawConn.RemoteAddr().String()
 	if tc, ok := rawConn.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)
 		_ = tc.SetReadBuffer(s.cfg.BufferSize)
@@ -132,7 +131,7 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 
 		info, err := faketls.VerifyClientHello(clientHello, s.cfg.SecretBytes)
 		if err != nil {
-			log.Printf("[%s] Fake TLS verify failed: %v -> redirecting", peer, err)
+			logFakeTLSFailure()
 			redirect := fmt.Sprintf("HTTP/1.1 301 Moved Permanently\r\nLocation: https://%s/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", s.cfg.FakeTLSDomain)
 			_, _ = rawConn.Write([]byte(redirect))
 			return
@@ -140,7 +139,7 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 
 		serverHello, err := faketls.BuildServerHello(s.cfg.SecretBytes, info.ClientRandom, info.SessionID)
 		if err != nil {
-			log.Printf("[%s] BuildServerHello failed: %v", peer, err)
+			log.Printf("[Proxy] BuildServerHello failed: %v", err)
 			return
 		}
 
@@ -153,7 +152,7 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 
 		_ = rawConn.SetDeadline(time.Now().Add(s.cfg.Timeout))
 		if _, err := io.ReadFull(fakeConn, handshake); err != nil {
-			log.Printf("[%s] Failed to read MTProto init inside TLS: %v", peer, err)
+			log.Printf("[Proxy] Failed to read MTProto init inside TLS: %v", err)
 			return
 		}
 	} else if s.cfg.IsFakeTLS {
@@ -176,7 +175,7 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 	res, err := crypto.TryHandshake(handshake, s.cfg.SecretBytes)
 	if err != nil {
 		relay.GlobalStats.IncConnectionsBad()
-		log.Printf("[%s] Bad handshake: %v", peer, err)
+		log.Printf("[Proxy] Bad handshake: %v", err)
 		return
 	}
 
@@ -195,23 +194,28 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 
 	relayInit, err := crypto.GenerateRelayInit(res.ProtoTag, dcIdx)
 	if err != nil {
-		log.Printf("[%s] Failed to generate relay init: %v", peer, err)
+		log.Printf("[Proxy] Failed to generate relay init: %v", err)
 		return
 	}
 
 	cryptoCtx, err := crypto.NewCryptoContext(res.ClientDecPrekeyIV, s.cfg.SecretBytes, relayInit)
 	if err != nil {
-		log.Printf("[%s] Failed to derive crypto context: %v", peer, err)
+		log.Printf("[Proxy] Failed to derive crypto context: %v", err)
 		return
 	}
 
 	splitter := proto.NewMsgSplitter(res.ProtoInt)
 
+	kind := "chat"
+	if isMedia {
+		kind = "media"
+	}
+
 	// Fast concurrent upstream connection with staggered Happy-Eyeballs dialing
 	upstreamWS, activeDomain, lastErr := s.dialFastUpstream(ctx, dcID, isMedia)
 	if upstreamWS != nil {
 		relay.GlobalStats.IncConnectionsWS()
-		log.Printf("[%s] DC%d (media=%t) connected via WS -> %s", peer, dcID, isMedia, activeDomain)
+		log.Printf("[Proxy] Connected DC%d (%s) via %s", dcID, kind, activeDomain)
 		if err := upstreamWS.Send(relayInit); err != nil {
 			_ = upstreamWS.Close()
 			return
@@ -239,7 +243,7 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 			})
 			if err == nil {
 				relay.GlobalStats.IncConnectionsFallback()
-				log.Printf("[%s] Connected via CF Worker %s for DC%d", peer, workerDomain, dcID)
+				log.Printf("[Proxy] Connected DC%d (%s) via CF Worker %s", dcID, kind, workerDomain)
 				if err := wsConn.Send(relayInit); err != nil {
 					_ = wsConn.Close()
 					return
@@ -252,7 +256,22 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 		}
 	}
 
-	log.Printf("[%s] DC%d (media=%t): No upstream gateways reachable (last error: %v)", peer, dcID, isMedia, lastErr)
+	log.Printf("[Proxy] DC%d (%s) unreachable: %v", dcID, kind, lastErr)
+}
+
+var (
+	fakeTLSLogMu   sync.Mutex
+	lastFakeTLSLog time.Time
+)
+
+func logFakeTLSFailure() {
+	fakeTLSLogMu.Lock()
+	defer fakeTLSLogMu.Unlock()
+	now := time.Now()
+	if now.Sub(lastFakeTLSLog) >= 3*time.Second {
+		lastFakeTLSLog = now
+		log.Printf("[Proxy] Fake TLS verify failed: secret mismatch -> redirecting")
+	}
 }
 
 type dialResult struct {

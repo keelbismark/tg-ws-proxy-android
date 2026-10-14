@@ -157,6 +157,18 @@ func BridgeWS(
 	wg.Wait()
 
 	elapsed := time.Since(startTime).Seconds()
-	log.Printf("[%s] Session closed: ^%d bytes, v%d bytes in %.1fs",
-		tag, upBytes, downBytes, elapsed)
+	if upBytes > 0 || downBytes > 0 {
+		log.Printf("[%s] Session closed: ^%s, v%s in %.1fs",
+			tag, FormatBytes(upBytes), FormatBytes(downBytes), elapsed)
+	}
+}
+
+// FormatBytes formats byte counts into human-readable B, KB, or MB units.
+func FormatBytes(b uint64) string {
+	if b < 1024 {
+		return fmt.Sprintf("%d B", b)
+	} else if b < 1024*1024 {
+		return fmt.Sprintf("%.1f KB", float64(b)/1024.0)
+	}
+	return fmt.Sprintf("%.2f MB", float64(b)/(1024.0*1024.0))
 }

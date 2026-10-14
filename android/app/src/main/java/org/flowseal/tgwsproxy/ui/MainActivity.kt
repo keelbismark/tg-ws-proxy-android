@@ -298,7 +298,7 @@ class MainActivity : AppCompatActivity() {
             TgWsProxyService.secretMismatchFlow.collectLatest {
                 Snackbar.make(
                     binding.root,
-                    "⚠️ Ключ в Telegram устарел! Обновите прокси в Telegram.",
+                    "Ключ в Telegram устарел! Обновите прокси в Telegram.",
                     Snackbar.LENGTH_INDEFINITE
                 ).setAction("Обновить") {
                     connectToTelegram()
@@ -320,7 +320,7 @@ class MainActivity : AppCompatActivity() {
             binding.dotLocalProxy.setBackgroundColor(android.graphics.Color.parseColor("#4CAF50"))
             binding.tvLocalProxyStatus.text = "Активен"
             binding.tvLocalProxyStatus.setTextColor(android.graphics.Color.parseColor("#4CAF50"))
-            binding.tvDiagnosticHint.text = "✅ Прокси активен на 127.0.0.1:$port. Трафик Telegram защищён и направлен через веб-шлюзы."
+            binding.tvDiagnosticHint.text = "Прокси активен на 127.0.0.1:$port. Трафик Telegram защищён и направлен через веб-шлюзы."
             binding.tvDiagnosticHint.setTextColor(android.graphics.Color.parseColor("#8BC34A"))
         } else {
             binding.viewStatusDot.setBackgroundColor(ContextCompat.getColor(this, R.color.status_inactive))
@@ -332,7 +332,7 @@ class MainActivity : AppCompatActivity() {
             binding.dotLocalProxy.setBackgroundColor(ContextCompat.getColor(this, R.color.status_inactive))
             binding.tvLocalProxyStatus.text = "Остановлен"
             binding.tvLocalProxyStatus.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
-            binding.tvDiagnosticHint.text = "ℹ️ Шлюзы на связи. Для работы Telegram запустите прокси кнопкой выше."
+            binding.tvDiagnosticHint.text = "Шлюзы на связи. Для работы Telegram запустите прокси кнопкой выше."
             binding.tvDiagnosticHint.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
         }
         binding.tvLocalProxyTitle.text = "Локальный мост (127.0.0.1:$port)"

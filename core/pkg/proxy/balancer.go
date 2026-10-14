@@ -37,7 +37,10 @@ func (b *Balancer) GetDomains(dcID int, isMedia bool, useCF bool) []string {
 		if targetDC == 203 {
 			targetDC = 2
 		}
-		workingDomain = fmt.Sprintf("kws%d.%s", targetDC, proto.CFDefaultDomains[0])
+		cfList := proto.GetCFDomains()
+		if len(cfList) > 0 {
+			workingDomain = fmt.Sprintf("kws%d.%s", targetDC, cfList[0])
+		}
 	}
 
 	if workingDomain != "" {
@@ -62,7 +65,7 @@ func (b *Balancer) GetDomains(dcID int, isMedia bool, useCF bool) []string {
 		if targetDC == 203 {
 			targetDC = 2
 		}
-		for _, base := range proto.CFDefaultDomains {
+		for _, base := range proto.GetCFDomains() {
 			candidate := fmt.Sprintf("kws%d.%s", targetDC, base)
 			if !seen[candidate] {
 				domains = append(domains, candidate)

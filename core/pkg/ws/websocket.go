@@ -188,16 +188,6 @@ func Connect(opts DialOptions) (*RawWebSocket, error) {
 		return nil, fmt.Errorf("dial failed: %w", dialErr)
 	}
 
-	stopCtxWatcher := make(chan struct{})
-	defer close(stopCtxWatcher)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = rawConn.Close()
-		case <-stopCtxWatcher:
-		}
-	}()
-
 	// Optimize socket options immediately on raw TCP socket
 	if tc, ok := rawConn.(*net.TCPConn); ok {
 		_ = tc.SetNoDelay(true)

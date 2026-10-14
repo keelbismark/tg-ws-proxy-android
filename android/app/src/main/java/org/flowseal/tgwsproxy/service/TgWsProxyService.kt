@@ -91,7 +91,7 @@ class TgWsProxyService : Service() {
                 lastRestartTime = now
                 restartAttempts++
                 if (restartAttempts <= 5) {
-                    LogFormatter.format("⚠️ Ядро завершило работу (попытка $restartAttempts/5). Автоперезапуск...")?.let {
+                    LogFormatter.format("[Внимание] Ядро завершило работу (попытка $restartAttempts/5). Автоперезапуск...")?.let {
                         _logFlow.tryEmit(it)
                     }
                     serviceScope.launch {
@@ -105,7 +105,7 @@ class TgWsProxyService : Service() {
                     }
                     return@setExitListener
                 } else {
-                    LogFormatter.format("❌ Превышен лимит перезапусков ядра.")?.let {
+                    LogFormatter.format("[Ошибка] Превышен лимит перезапусков ядра.")?.let {
                         _logFlow.tryEmit(it)
                     }
                 }
@@ -129,7 +129,7 @@ class TgWsProxyService : Service() {
                     lastLoggedUpMb = upMb
                     lastLoggedDownMb = downMb
                     val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(now))
-                    _logFlow.tryEmit("[$timeStr] 📊 Трафик: ↑ %.2f MB, ↓ %.2f MB (активно соединений: %d)".format(upMb, downMb, active))
+                    _logFlow.tryEmit("[$timeStr] [Статус] Трафик: ↑ %.2f MB, ↓ %.2f MB (активно соединений: %d)".format(upMb, downMb, active))
                 }
                 return@setLogListener // Suppress raw [Stats] noise
             }

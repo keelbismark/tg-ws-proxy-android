@@ -256,7 +256,22 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 		}
 	}
 
-	log.Printf("[Proxy] DC%d (%s) unreachable: %v", dcID, kind, lastErr)
+	logUnreachable(dcID, kind, lastErr)
+}
+
+var (
+	unreachableLogMu   sync.Mutex
+	lastUnreachableLog time.Time
+)
+
+func logUnreachable(dcID int, kind string, err error) {
+	unreachableLogMu.Lock()
+	defer unreachableLogMu.Unlock()
+	now := time.Now()
+	if now.Sub(lastUnreachableLog) >= 5*time.Second {
+		lastUnreachableLog = now
+		log.Printf("[Proxy] DC%d (%s) unreachable: %v", dcID, kind, err)
+	}
 }
 
 var (
@@ -268,7 +283,7 @@ func logFakeTLSFailure() {
 	fakeTLSLogMu.Lock()
 	defer fakeTLSLogMu.Unlock()
 	now := time.Now()
-	if now.Sub(lastFakeTLSLog) >= 3*time.Second {
+	if now.Sub(lastFakeTLSLog) >= 5*time.Second {
 		lastFakeTLSLog = now
 		log.Printf("[Proxy] Fake TLS verify failed: secret mismatch -> redirecting")
 	}
@@ -278,6 +293,11 @@ type dialResult struct {
 	ws     *ws.RawWebSocket
 	domain string
 	err    error
+	index  int
+}
+
+func (s *Server) DialFastUpstreamForTest(ctx context.Context, dcID int, isMedia bool) (*ws.RawWebSocket, string, error) {
+	return s.dialFastUpstream(ctx, dcID, isMedia)
 }
 
 // dialFastUpstream initiates concurrent staggered Happy-Eyeballs connection attempts
@@ -288,20 +308,64 @@ func (s *Server) dialFastUpstream(parentCtx context.Context, dcID int, isMedia b
 		return nil, "", errors.New("no upstream domains available")
 	}
 
-	// Limit to top 8 candidates to avoid socket churn
-	if len(domains) > 8 {
-		domains = domains[:8]
+	// Limit to top 6 candidates to avoid socket churn
+	if len(domains) > 6 {
+		domains = domains[:6]
 	}
 
-	dialCtx, cancelAll := context.WithCancel(parentCtx)
-	defer cancelAll()
-
 	resultCh := make(chan dialResult, len(domains))
-	nextCandidateCh := make(chan struct{}, len(domains))
-	nextCandidateCh <- struct{}{} // start candidate 0 immediately
+	cancels := make([]context.CancelFunc, len(domains))
+	var cancelsMu sync.Mutex
 
 	activeCount := 0
 	candidateIdx := 0
+
+	launchCandidate := func(idx int) {
+		if idx >= len(domains) {
+			return
+		}
+		domain := domains[idx]
+		candCtx, cancel := context.WithCancel(parentCtx)
+
+		cancelsMu.Lock()
+		cancels[idx] = cancel
+		cancelsMu.Unlock()
+
+		activeCount++
+		go func(d string, i int, cCtx context.Context) {
+			domainTimeout := 4 * time.Second
+			if IsDirectDomain(d) {
+				domainTimeout = 1500 * time.Millisecond
+			}
+			if s.cfg.Timeout < domainTimeout {
+				domainTimeout = s.cfg.Timeout
+			}
+
+			wsConn, err := ws.Connect(ws.DialOptions{
+				Context:    cCtx,
+				Host:       d,
+				Domain:     d,
+				Path:       proto.WSPath,
+				Secure:     true,
+				Timeout:    domainTimeout,
+				BufferSize: s.cfg.BufferSize,
+			})
+
+			if cCtx.Err() != nil {
+				if wsConn != nil {
+					_ = wsConn.Close()
+				}
+				return
+			}
+
+			resultCh <- dialResult{ws: wsConn, domain: d, err: err, index: i}
+		}(domain, idx, candCtx)
+	}
+
+	// Start first candidate immediately
+	launchCandidate(0)
+	candidateIdx = 1
+
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -309,68 +373,51 @@ func (s *Server) dialFastUpstream(parentCtx context.Context, dcID int, isMedia b
 
 	for {
 		select {
-		case <-nextCandidateCh:
-			if candidateIdx < len(domains) {
-				domain := domains[candidateIdx]
-				candidateIdx++
-				activeCount++
-				go func(d string) {
-					domainTimeout := 4 * time.Second
-					if IsDirectDomain(d) {
-						domainTimeout = 1500 * time.Millisecond
-					}
-					if s.cfg.Timeout < domainTimeout {
-						domainTimeout = s.cfg.Timeout
-					}
-
-					wsConn, err := ws.Connect(ws.DialOptions{
-						Context:    dialCtx,
-						Host:       d,
-						Domain:     d,
-						Path:       proto.WSPath,
-						Secure:     true,
-						Timeout:    domainTimeout,
-						BufferSize: s.cfg.BufferSize,
-					})
-
-					if dialCtx.Err() != nil {
-						if wsConn != nil {
-							_ = wsConn.Close()
-						}
-						return
-					}
-
-					resultCh <- dialResult{ws: wsConn, domain: d, err: err}
-				}(domain)
+		case <-parentCtx.Done():
+			cancelsMu.Lock()
+			for _, c := range cancels {
+				if c != nil {
+					c()
+				}
 			}
+			cancelsMu.Unlock()
+			return nil, "", parentCtx.Err()
 
 		case <-ticker.C:
 			// Stagger next dial if candidates remain and we have room for concurrency
-			if candidateIdx < len(domains) && activeCount < 4 {
-				select {
-				case nextCandidateCh <- struct{}{}:
-				default:
-				}
+			if candidateIdx < len(domains) && activeCount < 3 {
+				launchCandidate(candidateIdx)
+				candidateIdx++
 			}
 
 		case res := <-resultCh:
 			activeCount--
 			if res.err == nil && res.ws != nil {
-				cancelAll()
+				// Cancel ONLY losing candidates, NOT the winner!
+				cancelsMu.Lock()
+				for i, c := range cancels {
+					if i != res.index && c != nil {
+						c()
+					}
+				}
+				cancelsMu.Unlock()
+
 				globalBalancer.RecordSuccess(dcID, res.domain)
-				// Drain any extra successful dials in background so sockets don't leak
-				go func() {
+
+				// Background drain for excess connections
+				go func(winnerIndex int) {
 					for i := 0; i < len(domains)-1; i++ {
 						select {
 						case extra := <-resultCh:
-							if extra.ws != nil && extra.ws != res.ws {
+							if extra.index != winnerIndex && extra.ws != nil {
 								_ = extra.ws.Close()
 							}
 						case <-time.After(2 * time.Second):
 							return
 						}
 					}
-				}()
+				}(res.index)
+
 				return res.ws, res.domain, nil
 			}
 
@@ -381,20 +428,14 @@ func (s *Server) dialFastUpstream(parentCtx context.Context, dcID int, isMedia b
 
 			// If candidate failed early, trigger next candidate immediately
 			if candidateIdx < len(domains) {
-				select {
-				case nextCandidateCh <- struct{}{}:
-				default:
-				}
+				launchCandidate(candidateIdx)
+				candidateIdx++
 			} else if activeCount == 0 {
 				if lastErr == nil {
 					lastErr = errors.New("all upstream dials failed")
 				}
 				return nil, "", lastErr
 			}
-
-		case <-parentCtx.Done():
-			cancelAll()
-			return nil, "", parentCtx.Err()
 		}
 	}
 }

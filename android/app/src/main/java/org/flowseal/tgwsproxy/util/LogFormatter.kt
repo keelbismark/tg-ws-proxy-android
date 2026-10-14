@@ -15,7 +15,7 @@ object LogFormatter {
         if (trimmed.isEmpty()) return null
 
         // 1. Filter out raw stats spam (metrics are displayed on dashboard cards)
-        if (trimmed.startsWith("[Stats]") || trimmed.contains("Active:") && trimmed.contains("Total:")) {
+        if (trimmed.startsWith("[Stats]") || (trimmed.contains("Active:") && trimmed.contains("Total:"))) {
             return null
         }
 
@@ -25,8 +25,8 @@ object LogFormatter {
         }
 
         // 3. Extract timestamp
-        var timeStr = ""
-        var content = trimmed
+        val timeStr: String
+        var content: String
 
         val match = goLogPrefixRegex.find(trimmed)
         if (match != null) {
@@ -34,18 +34,18 @@ object LogFormatter {
             content = match.groupValues[2].trim()
         } else {
             timeStr = timeFormat.format(Date())
+            content = trimmed
         }
 
         // Clean local ephemeral port prefixes like [127.0.0.1:54321]
         content = localSocketRegex.replace(content, "")
 
-        // 4. Translate and enrich into high-value messages
+        // 4. Translate and enrich into high-value messages without emojis
         val formatted = when {
-            // Already formatted with emojis
-            content.startsWith("🚀") || content.startsWith("✅") || content.startsWith("⚠️") ||
-            content.startsWith("❌") || content.startsWith("🛑") || content.startsWith("📶") ||
-            content.startsWith("📊") || content.startsWith("🔄") || content.startsWith("🛡️") ||
-            content.startsWith("🟢") || content.startsWith("📷") -> {
+            // Already formatted with tags
+            content.startsWith("[Инфо]") || content.startsWith("[Внимание]") ||
+            content.startsWith("[Ошибка]") || content.startsWith("[Статус]") ||
+            content.startsWith("[Предупреждение]") -> {
                 content
             }
 
@@ -55,24 +55,24 @@ object LogFormatter {
                 val sniMatch = Regex("""SNI:\s*([^\s)]+)""").find(content)
                 val addr = addrMatch?.groupValues?.get(1) ?: "127.0.0.1:1443"
                 val sni = sniMatch?.groupValues?.get(1) ?: "google.com"
-                "🚀 Прокси запущен на $addr (маскировка: $sni)"
+                "[Инфо] Прокси запущен на $addr (маскировка: $sni)"
             }
 
             content.contains("Listening on") -> {
                 val addrMatch = Regex("""Listening on\s*([^\s]+)""").find(content)
                 val addr = addrMatch?.groupValues?.get(1) ?: "127.0.0.1:1443"
-                "🚀 Слушает локальный порт $addr"
+                "[Инфо] Слушает локальный порт $addr"
             }
 
             content.contains("Telegram link:") -> {
                 val link = content.substringAfter("Telegram link:").trim()
-                "🔗 Ссылка прокси: $link"
+                "[Инфо] Ссылка подключения: $link"
             }
 
             content.contains("CF gateway mirrors") || content.contains("Dynamic CF gateway domains") -> {
                 val countMatch = Regex("""(\d+)""").find(content)
                 val count = countMatch?.groupValues?.get(1) ?: "20"
-                "🛡️ Загружено $count резервных зеркал Cloudflare"
+                "[Инфо] Загружено $count резервных зеркал Cloudflare"
             }
 
             // Successful Telegram connections
@@ -81,7 +81,7 @@ object LogFormatter {
                 val domainMatch = Regex("""via\s+([^\s]+)""").find(content)
                 val dc = dcMatch?.groupValues?.get(1) ?: "2"
                 val domain = domainMatch?.groupValues?.get(1) ?: "шлюз"
-                "🟢 DC$dc (сообщения) подключен через $domain"
+                "[Инфо] DC$dc (сообщения) подключен к $domain"
             }
 
             content.contains("Connected DC") && content.contains("(media)") -> {
@@ -89,14 +89,14 @@ object LogFormatter {
                 val domainMatch = Regex("""via\s+([^\s]+)""").find(content)
                 val dc = dcMatch?.groupValues?.get(1) ?: "4"
                 val domain = domainMatch?.groupValues?.get(1) ?: "шлюз"
-                "📷 DC$dc (медиа/файлы) подключен через $domain"
+                "[Инфо] DC$dc (медиа) подключен к $domain"
             }
 
             content.contains("Connected via CF Worker") -> {
                 val workerMatch = Regex("""CF Worker\s+([^\s]+)\s+for DC(\d+)""").find(content)
                 val worker = workerMatch?.groupValues?.get(1) ?: ""
                 val dc = workerMatch?.groupValues?.get(2) ?: ""
-                "🌐 DC$dc подключен через Cloudflare Worker $worker"
+                "[Инфо] DC$dc подключен через Cloudflare Worker $worker"
             }
 
             // Session closed
@@ -108,38 +108,42 @@ object LogFormatter {
                     val up = statsMatch.groupValues[1]
                     val down = statsMatch.groupValues[2]
                     val sec = statsMatch.groupValues[3]
-                    "📶 $tag: сессия завершена (↑ $up, ↓ $down за ${sec}с)"
+                    "[Инфо] $tag: сессия закрыта (↑ $up, ↓ $down, ${sec}с)"
                 } else {
-                    "📶 $tag: сессия завершена"
+                    "[Инфо] $tag: сессия закрыта"
                 }
             }
 
             // Warnings & Errors
             content.contains("Fake TLS verify failed") || content.contains("secret mismatch") -> {
-                "⚠️ Несовпадение ключа Fake TLS (клиент Telegram использует старый ключ)"
+                "[Внимание] Несовпадение ключа Fake TLS (клиент Telegram использует старый ключ)"
             }
 
             content.contains("Bad handshake") -> {
-                "⚠️ Ошибка MTProto рукопожатия от клиента"
+                "[Предупреждение] Ошибка MTProto рукопожатия от клиента"
             }
 
             content.contains("unreachable") || content.contains("No upstream gateways reachable") -> {
-                "❌ Серверы Telegram недоступны (проверьте интернет или обновите зеркала)"
+                val errReason = content.substringAfter("unreachable:", "").trim()
+                if (errReason.isNotEmpty()) {
+                    "[Ошибка] Серверы Telegram недоступны: $errReason"
+                } else {
+                    "[Ошибка] Серверы Telegram недоступны (проверьте интернет или обновите зеркала)"
+                }
             }
 
             content.contains("Server shutdown cleanly") || content.startsWith("Остановка ядра") -> {
-                "🛑 Служба остановлена"
+                "[Инфо] Служба остановлена"
             }
 
             content.contains("Ошибка запуска") -> {
-                "❌ $content"
+                "[Ошибка] $content"
             }
 
             else -> {
-                // Remove [Proxy] tag if present
                 val cleaned = content.replace("[Proxy]", "").trim()
                 if (cleaned.isEmpty()) return null
-                "ℹ️ $cleaned"
+                "[Инфо] $cleaned"
             }
         }
 

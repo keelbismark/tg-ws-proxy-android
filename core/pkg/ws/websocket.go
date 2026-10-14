@@ -197,8 +197,9 @@ func Connect(opts DialOptions) (*RawWebSocket, error) {
 
 	if opts.Secure {
 		tlsConfig := &tls.Config{
-			ServerName: sni,
-			MinVersion: tls.VersionTLS12,
+			ServerName:         sni,
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: true, // Necessary on Android where system root CA certs are in /apex/... or restricted
 		}
 		tlsConn := tls.Client(rawConn, tlsConfig)
 		err := tlsConn.HandshakeContext(ctx)

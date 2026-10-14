@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -206,42 +207,8 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 
 	splitter := proto.NewMsgSplitter(res.ProtoInt)
 
-	// Attempt WebSocket connection using balancer (fast-cached CF pool + direct)
-	domains := globalBalancer.GetDomains(dcID, isMedia, s.cfg.FallbackCF)
-	var upstreamWS *ws.RawWebSocket
-	var activeDomain string
-	var lastErr error
-
-	for _, domain := range domains {
-		domainTimeout := 3 * time.Second
-		if IsDirectDomain(domain) {
-			domainTimeout = 1500 * time.Millisecond // fast failover on blocked direct domains
-		}
-		if s.cfg.Timeout < domainTimeout {
-			domainTimeout = s.cfg.Timeout
-		}
-
-		wsConn, err := ws.Connect(ws.DialOptions{
-			Host:       domain,
-			Domain:     domain,
-			Path:       proto.WSPath,
-			Secure:     true,
-			Timeout:    domainTimeout,
-			BufferSize: s.cfg.BufferSize,
-		})
-		if err == nil {
-			upstreamWS = wsConn
-			activeDomain = domain
-			globalBalancer.RecordSuccess(dcID, domain)
-			break
-		}
-
-		lastErr = err
-		if IsDirectDomain(domain) {
-			globalBalancer.RecordDirectFailure(dcID)
-		}
-	}
-
+	// Fast concurrent upstream connection with staggered Happy-Eyeballs dialing
+	upstreamWS, activeDomain, lastErr := s.dialFastUpstream(ctx, dcID, isMedia)
 	if upstreamWS != nil {
 		relay.GlobalStats.IncConnectionsWS()
 		log.Printf("[%s] DC%d (media=%t) connected via WS -> %s", peer, dcID, isMedia, activeDomain)
@@ -287,3 +254,129 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 
 	log.Printf("[%s] DC%d (media=%t): No upstream gateways reachable (last error: %v)", peer, dcID, isMedia, lastErr)
 }
+
+type dialResult struct {
+	ws     *ws.RawWebSocket
+	domain string
+	err    error
+}
+
+// dialFastUpstream initiates concurrent staggered Happy-Eyeballs connection attempts
+// to upstream gateways to prevent waiting on sequentially failing domains.
+func (s *Server) dialFastUpstream(parentCtx context.Context, dcID int, isMedia bool) (*ws.RawWebSocket, string, error) {
+	domains := globalBalancer.GetDomains(dcID, isMedia, s.cfg.FallbackCF)
+	if len(domains) == 0 {
+		return nil, "", errors.New("no upstream domains available")
+	}
+
+	// Limit to top 8 candidates to avoid socket churn
+	if len(domains) > 8 {
+		domains = domains[:8]
+	}
+
+	dialCtx, cancelAll := context.WithCancel(parentCtx)
+	defer cancelAll()
+
+	resultCh := make(chan dialResult, len(domains))
+	nextCandidateCh := make(chan struct{}, len(domains))
+	nextCandidateCh <- struct{}{} // start candidate 0 immediately
+
+	activeCount := 0
+	candidateIdx := 0
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	var lastErr error
+
+	for {
+		select {
+		case <-nextCandidateCh:
+			if candidateIdx < len(domains) {
+				domain := domains[candidateIdx]
+				candidateIdx++
+				activeCount++
+				go func(d string) {
+					domainTimeout := 4 * time.Second
+					if IsDirectDomain(d) {
+						domainTimeout = 1500 * time.Millisecond
+					}
+					if s.cfg.Timeout < domainTimeout {
+						domainTimeout = s.cfg.Timeout
+					}
+
+					wsConn, err := ws.Connect(ws.DialOptions{
+						Context:    dialCtx,
+						Host:       d,
+						Domain:     d,
+						Path:       proto.WSPath,
+						Secure:     true,
+						Timeout:    domainTimeout,
+						BufferSize: s.cfg.BufferSize,
+					})
+
+					if dialCtx.Err() != nil {
+						if wsConn != nil {
+							_ = wsConn.Close()
+						}
+						return
+					}
+
+					resultCh <- dialResult{ws: wsConn, domain: d, err: err}
+				}(domain)
+			}
+
+		case <-ticker.C:
+			// Stagger next dial if candidates remain and we have room for concurrency
+			if candidateIdx < len(domains) && activeCount < 4 {
+				select {
+				case nextCandidateCh <- struct{}{}:
+				default:
+				}
+			}
+
+		case res := <-resultCh:
+			activeCount--
+			if res.err == nil && res.ws != nil {
+				cancelAll()
+				globalBalancer.RecordSuccess(dcID, res.domain)
+				// Drain any extra successful dials in background so sockets don't leak
+				go func() {
+					for i := 0; i < len(domains)-1; i++ {
+						select {
+						case extra := <-resultCh:
+							if extra.ws != nil && extra.ws != res.ws {
+								_ = extra.ws.Close()
+							}
+						case <-time.After(2 * time.Second):
+							return
+						}
+					}
+				}()
+				return res.ws, res.domain, nil
+			}
+
+			lastErr = res.err
+			if IsDirectDomain(res.domain) {
+				globalBalancer.RecordDirectFailure(dcID)
+			}
+
+			// If candidate failed early, trigger next candidate immediately
+			if candidateIdx < len(domains) {
+				select {
+				case nextCandidateCh <- struct{}{}:
+				default:
+				}
+			} else if activeCount == 0 {
+				if lastErr == nil {
+					lastErr = errors.New("all upstream dials failed")
+				}
+				return nil, "", lastErr
+			}
+
+		case <-parentCtx.Done():
+			cancelAll()
+			return nil, "", parentCtx.Err()
+		}
+	}
+}
+

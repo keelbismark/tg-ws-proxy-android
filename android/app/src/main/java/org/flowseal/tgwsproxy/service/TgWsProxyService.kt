@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.net.wifi.WifiManager
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
@@ -163,7 +165,15 @@ class TgWsProxyService : Service() {
             acquireLocks()
 
             val notification = buildNotification(port)
-            startForeground(NOTIFICATION_ID, notification)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                }
+                startForeground(NOTIFICATION_ID, notification, type)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
 
             val dynamicDomains = SettingsManager.getDynamicDomains(this).joinToString(",")
             val fallbackEnabled = SettingsManager.isCloudflareFallback(this)
@@ -238,7 +248,7 @@ class TgWsProxyService : Service() {
             .setOngoing(true)
             .addAction(R.drawable.ic_telegram, getString(R.string.action_connect), connectPendingIntent)
             .addAction(R.drawable.ic_stop, getString(R.string.action_stop), stopPendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
     }
 

@@ -335,6 +335,50 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- Background Settings Section for Infinix / DuraSpeed / Battery -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="24dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Работа в фоне (Infinix / Xiaomi)"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Снять лимиты батареи и фонового трафика"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnBackgroundSettings"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:text="Настроить"
+            android:textSize="12sp"
+            android:textColor="@color/primary"
+            app:strokeColor="@color/surface_card"
+            app:icon="@drawable/ic_settings"
+            app:iconTint="@color/primary" />
+    </LinearLayout>
+
     <!-- Bottom Buttons -->
     <LinearLayout
         android:layout_width="match_parent"

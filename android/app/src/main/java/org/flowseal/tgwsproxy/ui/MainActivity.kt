@@ -65,6 +65,52 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun openBackgroundOptimizationSettings() {
+        val intents = mutableListOf<Intent>()
+
+        // 1. Unrestricted Background Data usage (Android 7.0+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            intents.add(
+                Intent(Settings.ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+            )
+        }
+
+        // 2. Battery optimization ignore request
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            intents.add(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+            )
+        }
+
+        // 3. Fallback to App Details Settings
+        intents.add(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+        )
+
+        var launched = false
+        for (intent in intents) {
+            try {
+                startActivity(intent)
+                launched = true
+                break
+            } catch (_: Exception) {}
+        }
+
+        if (launched) {
+            Toast.makeText(
+                this,
+                "Для Infinix/Tecno/Xiaomi: разрешите «Работу в фоне» и «Неограниченный трафик»",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     private fun checkPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
@@ -343,6 +389,10 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this@MainActivity, "Не удалось обновить зеркала", Toast.LENGTH_SHORT).show()
                 }
             }
+        }
+
+        sheetBinding.btnBackgroundSettings.setOnClickListener {
+            openBackgroundOptimizationSettings()
         }
 
         when (currentDomain) {

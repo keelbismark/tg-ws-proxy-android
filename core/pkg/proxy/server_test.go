@@ -93,3 +93,23 @@ func TestServer_FakeTLSEndToEnd(t *testing.T) {
 		t.Fatalf("expected server hello handshake, got %02x", shHdr[0])
 	}
 }
+
+func TestServer_DialFastUpstreamFailsGracefully(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.FallbackCF = false
+	srv := NewServer(cfg)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	wsConn, domain, err := srv.dialFastUpstream(ctx, 999, false)
+	if wsConn != nil {
+		wsConn.Close()
+		t.Fatal("expected no connection")
+	}
+	if err == nil {
+		t.Fatal("expected error for non-existent routes")
+	}
+	_ = domain
+}
+

@@ -48,6 +48,7 @@ type RawWebSocket struct {
 
 // DialOptions holds connection parameters.
 type DialOptions struct {
+	Context    context.Context
 	Host       string
 	Port       int
 	Domain     string
@@ -143,6 +144,16 @@ func Connect(opts DialOptions) (*RawWebSocket, error) {
 		opts.BufferSize = 65536
 	}
 
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var cancel context.CancelFunc
+	if opts.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, opts.Timeout)
+		defer cancel()
+	}
+
 	port := opts.Port
 	if port == 0 {
 		if opts.Secure {
@@ -152,14 +163,12 @@ func Connect(opts DialOptions) (*RawWebSocket, error) {
 		}
 	}
 
-	ips, err := resolveHostFast(context.Background(), opts.Host)
+	ips, err := resolveHostFast(ctx, opts.Host)
 	if err != nil {
 		return nil, err
 	}
 
-	dialer := &net.Dialer{
-		Timeout: opts.Timeout,
-	}
+	dialer := &net.Dialer{}
 
 	sni := opts.SNI
 	if sni == "" {
@@ -170,7 +179,7 @@ func Connect(opts DialOptions) (*RawWebSocket, error) {
 	var dialErr error
 	for _, ip := range ips {
 		targetAddr := net.JoinHostPort(ip.String(), fmt.Sprintf("%d", port))
-		rawConn, dialErr = dialer.Dial("tcp", targetAddr)
+		rawConn, dialErr = dialer.DialContext(ctx, "tcp", targetAddr)
 		if dialErr == nil {
 			break
 		}
@@ -178,6 +187,16 @@ func Connect(opts DialOptions) (*RawWebSocket, error) {
 	if dialErr != nil || rawConn == nil {
 		return nil, fmt.Errorf("dial failed: %w", dialErr)
 	}
+
+	stopCtxWatcher := make(chan struct{})
+	defer close(stopCtxWatcher)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = rawConn.Close()
+		case <-stopCtxWatcher:
+		}
+	}()
 
 	// Optimize socket options immediately on raw TCP socket
 	if tc, ok := rawConn.(*net.TCPConn); ok {
@@ -192,9 +211,7 @@ func Connect(opts DialOptions) (*RawWebSocket, error) {
 			MinVersion: tls.VersionTLS12,
 		}
 		tlsConn := tls.Client(rawConn, tlsConfig)
-		ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 		err := tlsConn.HandshakeContext(ctx)
-		cancel()
 		if err != nil {
 			_ = rawConn.Close()
 			return nil, fmt.Errorf("tls handshake failed: %w", err)

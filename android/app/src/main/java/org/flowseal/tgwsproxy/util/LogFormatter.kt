@@ -3,12 +3,23 @@ package org.flowseal.tgwsproxy.util
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 object LogFormatter {
 
     private val goLogPrefixRegex = Regex("""^\d{4}/\d{2}/\d{2}\s+(\d{2}:\d{2}:\d{2})\s+(.*)$""")
     private val localSocketRegex = Regex("""\[127\.0\.0\.1:\d+\]\s*""")
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+
+    private var lastStartupTime = 0L
+    private val lastChatLogTime = ConcurrentHashMap<String, Long>()
+    private val lastMediaLogTime = ConcurrentHashMap<String, Long>()
+
+    fun reset() {
+        lastStartupTime = 0L
+        lastChatLogTime.clear()
+        lastMediaLogTime.clear()
+    }
 
     fun format(rawLine: String): String? {
         val trimmed = rawLine.trim()
@@ -19,28 +30,34 @@ object LogFormatter {
             return null
         }
 
-        // 2. Filter out ASCII banners and decorative dividers
+        // 2. Filter out ASCII banners, decorative dividers, and low-value technical lines
         if (trimmed.startsWith("===") || trimmed.startsWith("TG WS Proxy (Go Mobile Core)")) {
             return null
         }
 
-        // 3. Extract timestamp
-        val timeStr: String
-        var content: String
+        // 3. Filter out connection closure noise (normal TCP lifecycle, aggregated into stats)
+        if (trimmed.contains("Session closed:") || trimmed.contains(": сессия закрыта")) {
+            return null
+        }
+
+        // 4. Filter out raw socket listening and telegram links (already provided by UI)
+        if (trimmed.contains("Listening on") || trimmed.contains("Telegram link:")) {
+            return null
+        }
+
+        // 5. Extract timestamp (always use local device time for consistency)
+        val timeStr = timeFormat.format(Date())
+        var content = trimmed
 
         val match = goLogPrefixRegex.find(trimmed)
         if (match != null) {
-            timeStr = match.groupValues[1]
             content = match.groupValues[2].trim()
-        } else {
-            timeStr = timeFormat.format(Date())
-            content = trimmed
         }
 
         // Clean local ephemeral port prefixes like [127.0.0.1:54321]
         content = localSocketRegex.replace(content, "")
 
-        // 4. Translate and enrich into high-value messages without emojis
+        // 6. Translate and enrich into high-value messages without spam or emojis
         val formatted = when {
             // Already formatted with tags
             content.startsWith("[Инфо]") || content.startsWith("[Внимание]") ||
@@ -49,24 +66,18 @@ object LogFormatter {
                 content
             }
 
-            // Core startup & readiness
+            // Core startup & readiness (deduplicated: max once per 5 seconds)
             content.contains("Ready on") || content.startsWith("Запуск ядра:") -> {
+                val now = System.currentTimeMillis()
+                if (now - lastStartupTime < 5000L) {
+                    return null
+                }
+                lastStartupTime = now
                 val addrMatch = Regex("""(?:Ready on|Запуск ядра:)\s*([^\s]+)""").find(content)
                 val sniMatch = Regex("""SNI:\s*([^\s)]+)""").find(content)
                 val addr = addrMatch?.groupValues?.get(1) ?: "127.0.0.1:1443"
                 val sni = sniMatch?.groupValues?.get(1) ?: "google.com"
                 "[Инфо] Прокси запущен на $addr (маскировка: $sni)"
-            }
-
-            content.contains("Listening on") -> {
-                val addrMatch = Regex("""Listening on\s*([^\s]+)""").find(content)
-                val addr = addrMatch?.groupValues?.get(1) ?: "127.0.0.1:1443"
-                "[Инфо] Слушает локальный порт $addr"
-            }
-
-            content.contains("Telegram link:") -> {
-                val link = content.substringAfter("Telegram link:").trim()
-                "[Инфо] Ссылка подключения: $link"
             }
 
             content.contains("CF gateway mirrors") || content.contains("Dynamic CF gateway domains") -> {
@@ -75,20 +86,35 @@ object LogFormatter {
                 "[Инфо] Загружено $count резервных зеркал Cloudflare"
             }
 
-            // Successful Telegram connections
+            // Successful Telegram chat connections (rate-limited to 1 per 30s per DC/domain)
             content.contains("Connected DC") && content.contains("(chat)") -> {
                 val dcMatch = Regex("""Connected DC(\d+)""").find(content)
                 val domainMatch = Regex("""via\s+([^\s]+)""").find(content)
                 val dc = dcMatch?.groupValues?.get(1) ?: "2"
                 val domain = domainMatch?.groupValues?.get(1) ?: "шлюз"
+                val key = "$dc:$domain"
+                val now = System.currentTimeMillis()
+                val last = lastChatLogTime[key] ?: 0L
+                if (now - last < 30_000L) {
+                    return null
+                }
+                lastChatLogTime[key] = now
                 "[Инфо] DC$dc (сообщения) подключен к $domain"
             }
 
+            // Successful Telegram media connections (rate-limited to 1 per 60s per DC/domain)
             content.contains("Connected DC") && content.contains("(media)") -> {
                 val dcMatch = Regex("""Connected DC(\d+)""").find(content)
                 val domainMatch = Regex("""via\s+([^\s]+)""").find(content)
                 val dc = dcMatch?.groupValues?.get(1) ?: "4"
                 val domain = domainMatch?.groupValues?.get(1) ?: "шлюз"
+                val key = "$dc:$domain"
+                val now = System.currentTimeMillis()
+                val last = lastMediaLogTime[key] ?: 0L
+                if (now - last < 60_000L) {
+                    return null
+                }
+                lastMediaLogTime[key] = now
                 "[Инфо] DC$dc (медиа) подключен к $domain"
             }
 
@@ -96,22 +122,14 @@ object LogFormatter {
                 val workerMatch = Regex("""CF Worker\s+([^\s]+)\s+for DC(\d+)""").find(content)
                 val worker = workerMatch?.groupValues?.get(1) ?: ""
                 val dc = workerMatch?.groupValues?.get(2) ?: ""
-                "[Инфо] DC$dc подключен через Cloudflare Worker $worker"
-            }
-
-            // Session closed
-            content.contains("Session closed:") -> {
-                val tagMatch = Regex("""\[([^]]+)]""").find(content)
-                val statsMatch = Regex("""Session closed:\s*\^([^,]+),\s*v([^\s]+)\s+in\s+([\d.]+)s""").find(content)
-                val tag = tagMatch?.groupValues?.get(1) ?: "DC"
-                if (statsMatch != null) {
-                    val up = statsMatch.groupValues[1]
-                    val down = statsMatch.groupValues[2]
-                    val sec = statsMatch.groupValues[3]
-                    "[Инфо] $tag: сессия закрыта (↑ $up, ↓ $down, ${sec}с)"
-                } else {
-                    "[Инфо] $tag: сессия закрыта"
+                val key = "$dc:$worker"
+                val now = System.currentTimeMillis()
+                val last = lastChatLogTime[key] ?: 0L
+                if (now - last < 30_000L) {
+                    return null
                 }
+                lastChatLogTime[key] = now
+                "[Инфо] DC$dc подключен через Cloudflare Worker $worker"
             }
 
             // Warnings & Errors

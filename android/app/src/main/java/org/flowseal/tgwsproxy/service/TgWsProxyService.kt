@@ -182,6 +182,7 @@ class TgWsProxyService : Service() {
 
     private fun startProxy(port: Int, secret: String, domain: String, cfWorker: String) {
         try {
+            LogFormatter.reset()
             isStoppingExplicitly = false
             acquireLocks()
 
@@ -229,6 +230,7 @@ class TgWsProxyService : Service() {
         isStoppingExplicitly = true
         runner.stop()
         releaseLocks()
+        LogFormatter.reset()
         _isRunning.value = false
         _statsFlow.value = ProxyStats()
         stopForeground(STOP_FOREGROUND_REMOVE)

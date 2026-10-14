@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -25,23 +24,11 @@ func BridgeWS(
 	dcID int,
 	isMedia bool,
 ) {
-	tag := "DC?"
-	if dcID > 0 {
-		mediaSuffix := ""
-		if isMedia {
-			mediaSuffix = "m"
-		}
-		tag = fmt.Sprintf("DC%d%s", dcID, mediaSuffix)
-	}
-
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-
-	startTime := time.Now()
-	var upBytes, downBytes uint64
 
 	// Keepalive ping ticker every 30s to prevent Cloudflare 100s idle timeout
 	go func() {
@@ -77,7 +64,6 @@ func BridgeWS(
 			if n > 0 {
 				chunk := buf[:n]
 				stats.AddBytesUp(n)
-				upBytes += uint64(n)
 
 				plain := make([]byte, n)
 				cryptoCtx.CltDec.XORKeyStream(plain, chunk)
@@ -137,7 +123,6 @@ func BridgeWS(
 
 			n := len(data)
 			stats.AddBytesDown(n)
-			downBytes += uint64(n)
 
 			plain := make([]byte, n)
 			cryptoCtx.TgDec.XORKeyStream(plain, data)
@@ -155,12 +140,6 @@ func BridgeWS(
 	_ = client.Close()
 	_ = remoteWS.Close()
 	wg.Wait()
-
-	elapsed := time.Since(startTime).Seconds()
-	if upBytes > 0 || downBytes > 0 {
-		log.Printf("[%s] Session closed: ^%s, v%s in %.1fs",
-			tag, FormatBytes(upBytes), FormatBytes(downBytes), elapsed)
-	}
 }
 
 // FormatBytes formats byte counts into human-readable B, KB, or MB units.

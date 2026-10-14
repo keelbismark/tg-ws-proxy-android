@@ -48,9 +48,6 @@ func (s *Server) Start(ctx context.Context) error {
 	s.listener = ln
 	s.mu.Unlock()
 
-	log.Printf("[Proxy] Listening on %s (Fake TLS: %t, SNI: %s)",
-		s.cfg.ListenAddr, s.cfg.IsFakeTLS, s.cfg.FakeTLSDomain)
-
 	// Close listener on context cancellation
 	go func() {
 		<-ctx.Done()
@@ -215,7 +212,7 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 	upstreamWS, activeDomain, lastErr := s.dialFastUpstream(ctx, dcID, isMedia)
 	if upstreamWS != nil {
 		relay.GlobalStats.IncConnectionsWS()
-		log.Printf("[Proxy] Connected DC%d (%s) via %s", dcID, kind, activeDomain)
+		logConnected(dcID, isMedia, activeDomain)
 		if err := upstreamWS.Send(relayInit); err != nil {
 			_ = upstreamWS.Close()
 			return
@@ -243,7 +240,7 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 			})
 			if err == nil {
 				relay.GlobalStats.IncConnectionsFallback()
-				log.Printf("[Proxy] Connected DC%d (%s) via CF Worker %s", dcID, kind, workerDomain)
+				logConnected(dcID, isMedia, "CF Worker "+workerDomain)
 				if err := wsConn.Send(relayInit); err != nil {
 					_ = wsConn.Close()
 					return
@@ -286,6 +283,29 @@ func logFakeTLSFailure() {
 	if now.Sub(lastFakeTLSLog) >= 5*time.Second {
 		lastFakeTLSLog = now
 		log.Printf("[Proxy] Fake TLS verify failed: secret mismatch -> redirecting")
+	}
+}
+
+var (
+	connLogMu    sync.Mutex
+	lastChatLog  = make(map[int]time.Time)
+	lastMediaLog = make(map[int]time.Time)
+)
+
+func logConnected(dcID int, isMedia bool, domain string) {
+	connLogMu.Lock()
+	defer connLogMu.Unlock()
+	now := time.Now()
+	if isMedia {
+		if now.Sub(lastMediaLog[dcID]) >= 60*time.Second {
+			lastMediaLog[dcID] = now
+			log.Printf("[Proxy] Connected DC%d (media) via %s", dcID, domain)
+		}
+	} else {
+		if now.Sub(lastChatLog[dcID]) >= 30*time.Second {
+			lastChatLog[dcID] = now
+			log.Printf("[Proxy] Connected DC%d (chat) via %s", dcID, domain)
+		}
 	}
 }
 

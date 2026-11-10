@@ -11,6 +11,13 @@ object LogFormatter {
     private val localSocketRegex = Regex("""\[127\.0\.0\.1:\d+\]\s*""")
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
+    private val readyOnRegex = Regex("""(?:Ready on|Запуск ядра:)\s*([^\s]+)""")
+    private val sniRegex = Regex("""SNI:\s*([^\s)]+)""")
+    private val digitsRegex = Regex("""(\d+)""")
+    private val connectedDcRegex = Regex("""Connected DC(\d+)""")
+    private val viaDomainRegex = Regex("""via\s+([^\s]+)""")
+    private val cfWorkerRegex = Regex("""CF Worker\s+([^\s]+)\s+for DC(\d+)""")
+
     private var lastStartupTime = 0L
     private val lastChatLogTime = ConcurrentHashMap<String, Long>()
     private val lastMediaLogTime = ConcurrentHashMap<String, Long>()
@@ -73,23 +80,23 @@ object LogFormatter {
                     return null
                 }
                 lastStartupTime = now
-                val addrMatch = Regex("""(?:Ready on|Запуск ядра:)\s*([^\s]+)""").find(content)
-                val sniMatch = Regex("""SNI:\s*([^\s)]+)""").find(content)
+                val addrMatch = readyOnRegex.find(content)
+                val sniMatch = sniRegex.find(content)
                 val addr = addrMatch?.groupValues?.get(1) ?: "127.0.0.1:1443"
                 val sni = sniMatch?.groupValues?.get(1) ?: "google.com"
                 "[Инфо] Прокси запущен на $addr (маскировка: $sni)"
             }
 
             content.contains("CF gateway mirrors") || content.contains("Dynamic CF gateway domains") -> {
-                val countMatch = Regex("""(\d+)""").find(content)
+                val countMatch = digitsRegex.find(content)
                 val count = countMatch?.groupValues?.get(1) ?: "20"
                 "[Инфо] Загружено $count резервных зеркал Cloudflare"
             }
 
             // Successful Telegram chat connections (rate-limited to 1 per 30s per DC/domain)
             content.contains("Connected DC") && content.contains("(chat)") -> {
-                val dcMatch = Regex("""Connected DC(\d+)""").find(content)
-                val domainMatch = Regex("""via\s+([^\s]+)""").find(content)
+                val dcMatch = connectedDcRegex.find(content)
+                val domainMatch = viaDomainRegex.find(content)
                 val dc = dcMatch?.groupValues?.get(1) ?: "2"
                 val domain = domainMatch?.groupValues?.get(1) ?: "шлюз"
                 val key = "$dc:$domain"
@@ -104,8 +111,8 @@ object LogFormatter {
 
             // Successful Telegram media connections (rate-limited to 1 per 60s per DC/domain)
             content.contains("Connected DC") && content.contains("(media)") -> {
-                val dcMatch = Regex("""Connected DC(\d+)""").find(content)
-                val domainMatch = Regex("""via\s+([^\s]+)""").find(content)
+                val dcMatch = connectedDcRegex.find(content)
+                val domainMatch = viaDomainRegex.find(content)
                 val dc = dcMatch?.groupValues?.get(1) ?: "4"
                 val domain = domainMatch?.groupValues?.get(1) ?: "шлюз"
                 val key = "$dc:$domain"
@@ -119,7 +126,7 @@ object LogFormatter {
             }
 
             content.contains("Connected via CF Worker") -> {
-                val workerMatch = Regex("""CF Worker\s+([^\s]+)\s+for DC(\d+)""").find(content)
+                val workerMatch = cfWorkerRegex.find(content)
                 val worker = workerMatch?.groupValues?.get(1) ?: ""
                 val dc = workerMatch?.groupValues?.get(2) ?: ""
                 val key = "$dc:$worker"

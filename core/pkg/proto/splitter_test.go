@@ -102,3 +102,54 @@ func TestMsgSplitter_MultiplePackets(t *testing.T) {
 		t.Fatalf("incorrect packet sizes: %d, %d", len(parts[0]), len(parts[1]))
 	}
 }
+
+func TestMsgSplitter_IncompleteAbridgedCompaction(t *testing.T) {
+	s := NewMsgSplitter(ProtoAbridgedInt)
+
+	// Incomplete packet: 10 words (40 bytes payload) + 1 byte header = 41 bytes
+	pkt := make([]byte, 41)
+	pkt[0] = 10
+	for i := 1; i < len(pkt); i++ {
+		pkt[i] = byte((i*7 + 13)%251 + 1)
+	}
+
+	// Send first 15 bytes
+	p1 := s.Split(pkt[:15], pkt[:15])
+	if len(p1) != 0 {
+		t.Fatalf("expected 0 parts for partial, got %d", len(p1))
+	}
+
+	// Send remaining 26 bytes
+	p2 := s.Split(pkt[15:], pkt[15:])
+	if len(p2) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(p2))
+	}
+	if len(p2[0]) != 41 {
+		t.Fatalf("expected 41 bytes, got %d", len(p2[0]))
+	}
+	if !bytes.Equal(p2[0], pkt) {
+		t.Fatalf("compacted payload corrupted: got %x, want %x", p2[0], pkt)
+	}
+}
+
+func TestUpstreamDomains(t *testing.T) {
+	orig := GetCFDomains()
+	defer SetCFDomains(orig)
+
+	SetCFDomains([]string{"custom1.com", "custom2.com"})
+
+	domains := AllUpstreamDomains(2, false, false)
+	if len(domains) != 1 || domains[0] != "kws2.web.telegram.org" {
+		t.Fatalf("unexpected direct domains: %v", domains)
+	}
+
+	domainsCF := AllUpstreamDomains(2, false, true)
+	if len(domainsCF) != 3 {
+		t.Fatalf("expected 3 domains with CF, got %d: %v", len(domainsCF), domainsCF)
+	}
+
+	domainsMedia := AllUpstreamDomains(4, true, false)
+	if len(domainsMedia) != 2 {
+		t.Fatalf("expected 2 media domains, got %d", len(domainsMedia))
+	}
+}

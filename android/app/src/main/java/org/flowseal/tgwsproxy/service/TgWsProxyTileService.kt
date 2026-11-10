@@ -29,10 +29,10 @@ class TgWsProxyTileService : TileService() {
             }
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
+        if (isRunning) {
             startService(intent)
+        } else {
+            androidx.core.content.ContextCompat.startForegroundService(this, intent)
         }
 
         updateTileState(!isRunning)

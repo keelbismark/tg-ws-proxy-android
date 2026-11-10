@@ -53,6 +53,11 @@ func BridgeWS(
 		defer cancel()
 
 		buf := make([]byte, 65536)
+		var plainBuf []byte
+		if splitter != nil {
+			plainBuf = make([]byte, 65536)
+		}
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -65,14 +70,12 @@ func BridgeWS(
 				chunk := buf[:n]
 				stats.AddBytesUp(n)
 
-				plain := make([]byte, n)
-				cryptoCtx.CltDec.XORKeyStream(plain, chunk)
-
-				reEnc := make([]byte, n)
-				cryptoCtx.TgEnc.XORKeyStream(reEnc, plain)
-
 				if splitter != nil {
-					parts := splitter.Split(reEnc, plain)
+					plain := plainBuf[:n]
+					cryptoCtx.CltDec.XORKeyStream(plain, chunk)
+					cryptoCtx.TgEnc.XORKeyStream(chunk, plain)
+
+					parts := splitter.Split(chunk, plain)
 					if len(parts) > 1 {
 						if err := remoteWS.SendBatch(parts); err != nil {
 							return
@@ -83,7 +86,9 @@ func BridgeWS(
 						}
 					}
 				} else {
-					if err := remoteWS.Send(reEnc); err != nil {
+					cryptoCtx.CltDec.XORKeyStream(chunk, chunk)
+					cryptoCtx.TgEnc.XORKeyStream(chunk, chunk)
+					if err := remoteWS.Send(chunk); err != nil {
 						return
 					}
 				}
@@ -124,13 +129,11 @@ func BridgeWS(
 			n := len(data)
 			stats.AddBytesDown(n)
 
-			plain := make([]byte, n)
-			cryptoCtx.TgDec.XORKeyStream(plain, data)
+			// In-place dual CTR stream decrypt and re-encrypt directly in data buffer
+			cryptoCtx.TgDec.XORKeyStream(data, data)
+			cryptoCtx.CltEnc.XORKeyStream(data, data)
 
-			reEnc := make([]byte, n)
-			cryptoCtx.CltEnc.XORKeyStream(reEnc, plain)
-
-			if _, err := client.Write(reEnc); err != nil {
+			if _, err := client.Write(data); err != nil {
 				return
 			}
 		}

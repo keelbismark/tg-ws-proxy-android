@@ -70,8 +70,12 @@ func (s *MsgSplitter) Split(chunk, plain []byte) [][]byte {
 	}
 
 	if offset > 0 {
-		s.cipherBuf = s.cipherBuf[offset:]
-		s.plainBuf = s.plainBuf[offset:]
+		rem := len(s.cipherBuf) - offset
+		copy(s.cipherBuf, s.cipherBuf[offset:])
+		s.cipherBuf = s.cipherBuf[:rem]
+
+		copy(s.plainBuf, s.plainBuf[offset:])
+		s.plainBuf = s.plainBuf[:rem]
 	}
 
 	return parts

@@ -254,9 +254,11 @@ class TgWsProxyService : Service() {
             val notification = buildNotification(currentPort, stats)
             val manager = NotificationManagerCompat.from(this)
             manager.notify(NOTIFICATION_ID, notification)
-        } catch (_: SecurityException) {
+        } catch (e: SecurityException) {
             // Notifications may be disabled by the user on Android 13+
-        } catch (_: Exception) {
+            android.util.Log.d("TgWsProxyService", "Notification permission not granted: ${e.message}")
+        } catch (e: RuntimeException) {
+            android.util.Log.w("TgWsProxyService", "Failed to update notification: ${e.message}")
         }
     }
 
@@ -357,10 +359,14 @@ class TgWsProxyService : Service() {
     private fun releaseLocks() {
         try {
             if (wakeLock?.isHeld == true) wakeLock?.release()
-        } catch (_: Exception) {}
+        } catch (e: RuntimeException) {
+            android.util.Log.w("TgWsProxyService", "WakeLock release error: ${e.message}")
+        }
         try {
             if (wifiLock?.isHeld == true) wifiLock?.release()
-        } catch (_: Exception) {}
+        } catch (e: RuntimeException) {
+            android.util.Log.w("TgWsProxyService", "WifiLock release error: ${e.message}")
+        }
     }
 
     override fun onDestroy() {

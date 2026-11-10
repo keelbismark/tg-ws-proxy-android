@@ -54,6 +54,11 @@ object SettingsManager {
         "yandex.ru" to "Яндекс"
     )
 
+    private val secureRandom = SecureRandom()
+
+    private fun String.toHex(): String =
+        trim().toByteArray(Charsets.US_ASCII).joinToString("") { "%02x".format(it) }
+
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
@@ -153,9 +158,10 @@ object SettingsManager {
      * Downloads and updates latest Cloudflare gateway mirrors from GitHub.
      */
     suspend fun fetchAndRefreshDomains(context: Context): Result<Int> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        var conn: java.net.HttpURLConnection? = null
         try {
             val url = java.net.URL("$CFPROXY_DOMAINS_URL?cache_bust=${System.currentTimeMillis()}")
-            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn = url.openConnection() as java.net.HttpURLConnection
             conn.connectTimeout = 8000
             conn.readTimeout = 8000
             conn.requestMethod = "GET"
@@ -177,6 +183,8 @@ object SettingsManager {
             }
         } catch (e: Exception) {
             Result.failure(e)
+        } finally {
+            conn?.disconnect()
         }
     }
 
@@ -201,8 +209,7 @@ object SettingsManager {
      * Format: 'ee' + canonical key + domain in hex (ASCII).
      */
     fun getSecretForDomain(domain: String): String {
-        val domainHex = domain.trim().toByteArray(Charsets.US_ASCII).joinToString("") { "%02x".format(it) }
-        return "ee$CANONICAL_KEY_HEX$domainHex"
+        return "ee$CANONICAL_KEY_HEX${domain.toHex()}"
     }
 
     /**
@@ -210,10 +217,9 @@ object SettingsManager {
      */
     fun generateRandomSecretForDomain(domain: String): String {
         val randomBytes = ByteArray(16)
-        SecureRandom().nextBytes(randomBytes)
+        secureRandom.nextBytes(randomBytes)
         val randomHex = randomBytes.joinToString("") { "%02x".format(it) }
-        val domainHex = domain.trim().toByteArray(Charsets.US_ASCII).joinToString("") { "%02x".format(it) }
-        return "ee$randomHex$domainHex"
+        return "ee$randomHex${domain.toHex()}"
     }
 
     /**
@@ -227,7 +233,6 @@ object SettingsManager {
      * Checks if secret format matches the current domain.
      */
     fun isDomainMatchingSecret(secret: String, domain: String): Boolean {
-        val domainHex = domain.trim().toByteArray(Charsets.US_ASCII).joinToString("") { "%02x".format(it) }
-        return secret.lowercase().endsWith(domainHex.lowercase())
+        return secret.lowercase().endsWith(domain.toHex().lowercase())
     }
 }

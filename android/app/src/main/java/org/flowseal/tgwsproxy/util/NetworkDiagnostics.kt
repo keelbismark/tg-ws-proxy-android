@@ -56,7 +56,9 @@ object NetworkDiagnostics {
                 socket.connect(InetSocketAddress(host, port), timeoutMs)
             }
             System.currentTimeMillis() - start
-        } catch (_: Exception) {
+        } catch (_: java.io.IOException) {
+            null
+        } catch (_: SecurityException) {
             null
         }
     }

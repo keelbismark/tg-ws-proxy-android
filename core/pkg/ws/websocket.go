@@ -64,6 +64,11 @@ type dnsCacheEntry struct {
 	expiresAt time.Time
 }
 
+const (
+	maxDNSCacheEntries = 256
+	dnsCacheTTL        = 10 * time.Minute
+)
+
 var (
 	dnsCacheMu sync.RWMutex
 	dnsCache   = make(map[string]dnsCacheEntry)
@@ -73,6 +78,33 @@ var (
 		"8.8.8.8:53",   // Google DNS
 	}
 )
+
+func storeDNSCache(host string, ips []net.IP) {
+	now := time.Now()
+	dnsCacheMu.Lock()
+	defer dnsCacheMu.Unlock()
+
+	if len(dnsCache) >= maxDNSCacheEntries {
+		for h, e := range dnsCache {
+			if now.After(e.expiresAt) {
+				delete(dnsCache, h)
+			}
+		}
+		if len(dnsCache) >= maxDNSCacheEntries {
+			for h := range dnsCache {
+				delete(dnsCache, h)
+				if len(dnsCache) < maxDNSCacheEntries/2 {
+					break
+				}
+			}
+		}
+	}
+
+	dnsCache[host] = dnsCacheEntry{
+		ips:       ips,
+		expiresAt: now.Add(dnsCacheTTL),
+	}
+}
 
 func resolveHostFast(ctx context.Context, host string) ([]net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
@@ -103,12 +135,7 @@ func resolveHostFast(ctx context.Context, host string) ([]net.IP, error) {
 		cancel()
 
 		if err == nil && len(ips) > 0 {
-			dnsCacheMu.Lock()
-			dnsCache[host] = dnsCacheEntry{
-				ips:       ips,
-				expiresAt: now.Add(10 * time.Minute),
-			}
-			dnsCacheMu.Unlock()
+			storeDNSCache(host, ips)
 			return ips, nil
 		}
 		lastErr = err
@@ -117,12 +144,7 @@ func resolveHostFast(ctx context.Context, host string) ([]net.IP, error) {
 	systemResolver := net.DefaultResolver
 	ips, err := systemResolver.LookupIP(ctx, "ip4", host)
 	if err == nil && len(ips) > 0 {
-		dnsCacheMu.Lock()
-		dnsCache[host] = dnsCacheEntry{
-			ips:       ips,
-			expiresAt: now.Add(10 * time.Minute),
-		}
-		dnsCacheMu.Unlock()
+		storeDNSCache(host, ips)
 		return ips, nil
 	}
 

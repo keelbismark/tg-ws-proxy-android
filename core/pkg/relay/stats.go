@@ -5,6 +5,7 @@ import (
 )
 
 // Stats tracks aggregate network statistics across proxy sessions.
+// All 64-bit integer fields are naturally 64-bit aligned when allocated on heap.
 type Stats struct {
 	BytesUp             uint64
 	BytesDown           uint64
@@ -14,6 +15,9 @@ type Stats struct {
 	ConnectionsWS       uint64
 	ConnectionsFallback uint64
 }
+
+// StatsSnapshot provides an alias to Stats for backward compatibility.
+type StatsSnapshot = Stats
 
 var GlobalStats = &Stats{}
 

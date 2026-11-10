@@ -1,6 +1,7 @@
 package org.flowseal.tgwsproxy.ui
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -60,7 +61,11 @@ class MainActivity : AppCompatActivity() {
                         data = Uri.parse("package:$packageName")
                     }
                     startActivity(intent)
-                } catch (_: Exception) {}
+                } catch (e: ActivityNotFoundException) {
+                    android.util.Log.w("MainActivity", "Battery optimization intent not supported on this device", e)
+                } catch (e: SecurityException) {
+                    android.util.Log.w("MainActivity", "Battery optimization permission denied", e)
+                }
             }
         }
     }
@@ -99,7 +104,11 @@ class MainActivity : AppCompatActivity() {
                 startActivity(intent)
                 launched = true
                 break
-            } catch (_: Exception) {}
+            } catch (_: ActivityNotFoundException) {
+                // Try next candidate intent
+            } catch (e: SecurityException) {
+                android.util.Log.w("MainActivity", "Settings activity security exception", e)
+            }
         }
 
         if (launched) {
@@ -259,8 +268,10 @@ class MainActivity : AppCompatActivity() {
 
         try {
             startActivity(intent)
-        } catch (_: Exception) {
+        } catch (_: ActivityNotFoundException) {
             Toast.makeText(this, "Telegram не найден на этом устройстве", Toast.LENGTH_LONG).show()
+        } catch (e: SecurityException) {
+            Toast.makeText(this, "Не удалось открыть Telegram: доступ ограничен", Toast.LENGTH_LONG).show()
         }
     }
 

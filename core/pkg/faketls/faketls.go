@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"math"
 	"math/big"
 	"net"
 	"sync"
@@ -102,7 +101,11 @@ func VerifyClientHello(data, secret []byte) (*ClientHelloInfo, error) {
 	timestamp := int64(binary.LittleEndian.Uint32(tsXOR))
 
 	now := time.Now().Unix()
-	if math.Abs(float64(now-timestamp)) > TimestampTolerance {
+	diff := now - timestamp
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > TimestampTolerance {
 		return nil, ErrTimestampExpired
 	}
 
@@ -165,7 +168,8 @@ func BuildServerHello(secret, clientRandom, sessionID []byte) ([]byte, error) {
 type FakeTLSConn struct {
 	net.Conn
 	readBuf []byte
-	mu      sync.Mutex
+	readMu  sync.Mutex
+	writeMu sync.Mutex
 }
 
 // NewFakeTLSConn creates a FakeTLSConn wrapping an established net.Conn.
@@ -178,8 +182,8 @@ func NewFakeTLSConn(conn net.Conn) *FakeTLSConn {
 
 // Read reads and unboxes TLS Application Data frames.
 func (c *FakeTLSConn) Read(p []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
 
 	for len(c.readBuf) == 0 {
 		var hdr [5]byte
@@ -201,11 +205,17 @@ func (c *FakeTLSConn) Read(p []byte) (int, error) {
 
 	n := copy(p, c.readBuf)
 	c.readBuf = c.readBuf[n:]
+	if len(c.readBuf) == 0 {
+		c.readBuf = c.readBuf[:0]
+	}
 	return n, nil
 }
 
 // Write wraps outgoing data in TLS Application Data records (max 16KB per chunk).
 func (c *FakeTLSConn) Write(p []byte) (int, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
 	total := len(p)
 	offset := 0
 

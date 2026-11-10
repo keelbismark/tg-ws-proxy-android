@@ -129,27 +129,17 @@ func GenerateRelayInit(protoTag [4]byte, dcIdx int16) ([]byte, error) {
 	encryptedFull := make([]byte, proto.HandshakeLen)
 	stream.XORKeyStream(encryptedFull, rnd)
 
-	tailPlain := make([]byte, 8)
+	var tailPlain [8]byte
 	copy(tailPlain[0:4], protoTag[:])
 	binary.LittleEndian.PutUint16(tailPlain[4:6], uint16(dcIdx))
 	if _, err := io.ReadFull(rand.Reader, tailPlain[6:8]); err != nil {
 		return nil, err
 	}
 
-	keystreamTail := make([]byte, 8)
 	for i := 0; i < 8; i++ {
-		keystreamTail[i] = encryptedFull[56+i] ^ rnd[56+i]
+		rnd[proto.ProtoTagPos+i] = tailPlain[i] ^ encryptedFull[proto.ProtoTagPos+i] ^ rnd[proto.ProtoTagPos+i]
 	}
-
-	encryptedTail := make([]byte, 8)
-	for i := 0; i < 8; i++ {
-		encryptedTail[i] = tailPlain[i] ^ keystreamTail[i]
-	}
-
-	result := make([]byte, proto.HandshakeLen)
-	copy(result, rnd)
-	copy(result[proto.ProtoTagPos:proto.HandshakeLen], encryptedTail)
-	return result, nil
+	return rnd, nil
 }
 
 // CryptoContext contains 4 streaming ciphers for client and Telegram directions.
@@ -185,8 +175,8 @@ func NewCryptoContext(clientDecPrekeyIV, secret, relayInit []byte) (*CryptoConte
 	cltDec := cipher.NewCTR(cltDecBlock, cltDecIV)
 
 	// Fast-forward client decryptor past 64-byte init
-	zero64 := make([]byte, proto.HandshakeLen)
-	cltDec.XORKeyStream(zero64, zero64)
+	var zero64 [proto.HandshakeLen]byte
+	cltDec.XORKeyStream(zero64[:], zero64[:])
 
 	cltEncPrekeyIV := reverseBytes(clientDecPrekeyIV)
 	h2 := sha256.New()
@@ -211,8 +201,8 @@ func NewCryptoContext(clientDecPrekeyIV, secret, relayInit []byte) (*CryptoConte
 	tgEnc := cipher.NewCTR(tgEncBlock, relayEncIV)
 
 	// Fast-forward Telegram encryptor past 64-byte init
-	zero64TG := make([]byte, proto.HandshakeLen)
-	tgEnc.XORKeyStream(zero64TG, zero64TG)
+	var zero64TG [proto.HandshakeLen]byte
+	tgEnc.XORKeyStream(zero64TG[:], zero64TG[:])
 
 	relayDecPrekeyIV := reverseBytes(relayInit[proto.SkipLen : proto.SkipLen+proto.PrekeyLen+proto.IVLen])
 	relayDecKey := relayDecPrekeyIV[:proto.KeyLen]

@@ -247,3 +247,18 @@ func TestBuildFrame_RandomSizes(t *testing.T) {
 		}
 	}
 }
+
+func TestDNSCache_Bounded(t *testing.T) {
+	dummyIP := []net.IP{net.ParseIP("1.2.3.4")}
+	for i := 0; i < maxDNSCacheEntries+50; i++ {
+		storeDNSCache(fmt.Sprintf("host-%d.test", i), dummyIP)
+	}
+
+	dnsCacheMu.RLock()
+	count := len(dnsCache)
+	dnsCacheMu.RUnlock()
+
+	if count > maxDNSCacheEntries {
+		t.Fatalf("dnsCache exceeded max capacity: %d > %d", count, maxDNSCacheEntries)
+	}
+}

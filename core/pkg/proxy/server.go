@@ -107,7 +107,7 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 	}
 
 	var clientConn net.Conn = rawConn
-	handshake := make([]byte, proto.HandshakeLen)
+	var handshake [proto.HandshakeLen]byte
 
 	if firstByte[0] == faketls.TLSRecordHandshake && s.cfg.IsFakeTLS {
 		// Fake TLS ClientHello flow
@@ -148,7 +148,7 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 		clientConn = fakeConn
 
 		_ = rawConn.SetDeadline(time.Now().Add(s.cfg.Timeout))
-		if _, err := io.ReadFull(fakeConn, handshake); err != nil {
+		if _, err := io.ReadFull(fakeConn, handshake[:]); err != nil {
 			log.Printf("[Proxy] Failed to read MTProto init inside TLS: %v", err)
 			return
 		}
@@ -169,7 +169,7 @@ func (s *Server) handleClient(ctx context.Context, rawConn net.Conn) {
 	_ = clientConn.SetDeadline(time.Time{})
 
 	// Parse MTProto handshake
-	res, err := crypto.TryHandshake(handshake, s.cfg.SecretBytes)
+	res, err := crypto.TryHandshake(handshake[:], s.cfg.SecretBytes)
 	if err != nil {
 		relay.GlobalStats.IncConnectionsBad()
 		log.Printf("[Proxy] Bad handshake: %v", err)
@@ -336,6 +336,17 @@ func (s *Server) dialFastUpstream(parentCtx context.Context, dcID int, isMedia b
 	resultCh := make(chan dialResult, len(domains))
 	cancels := make([]context.CancelFunc, len(domains))
 	var cancelsMu sync.Mutex
+	var candidateWg sync.WaitGroup
+
+	defer func() {
+		cancelsMu.Lock()
+		for _, c := range cancels {
+			if c != nil {
+				c()
+			}
+		}
+		cancelsMu.Unlock()
+	}()
 
 	activeCount := 0
 	candidateIdx := 0
@@ -352,7 +363,9 @@ func (s *Server) dialFastUpstream(parentCtx context.Context, dcID int, isMedia b
 		cancelsMu.Unlock()
 
 		activeCount++
-		go func(d string, i int, cCtx context.Context) {
+		candidateWg.Add(1)
+		go func(d string, i int, cCtx context.Context, cCancel context.CancelFunc) {
+			defer candidateWg.Done()
 			domainTimeout := 4 * time.Second
 			if IsDirectDomain(d) {
 				domainTimeout = 1500 * time.Millisecond
@@ -375,11 +388,12 @@ func (s *Server) dialFastUpstream(parentCtx context.Context, dcID int, isMedia b
 				if wsConn != nil {
 					_ = wsConn.Close()
 				}
+				cCancel()
 				return
 			}
 
 			resultCh <- dialResult{ws: wsConn, domain: d, err: err, index: i}
-		}(domain, idx, candCtx)
+		}(domain, idx, candCtx, cancel)
 	}
 
 	// Start first candidate immediately
@@ -401,6 +415,15 @@ func (s *Server) dialFastUpstream(parentCtx context.Context, dcID int, isMedia b
 				}
 			}
 			cancelsMu.Unlock()
+			go func() {
+				candidateWg.Wait()
+				for len(resultCh) > 0 {
+					extra := <-resultCh
+					if extra.ws != nil {
+						_ = extra.ws.Close()
+					}
+				}
+			}()
 			return nil, "", parentCtx.Err()
 
 		case <-ticker.C:
@@ -413,10 +436,9 @@ func (s *Server) dialFastUpstream(parentCtx context.Context, dcID int, isMedia b
 		case res := <-resultCh:
 			activeCount--
 			if res.err == nil && res.ws != nil {
-				// Cancel ONLY losing candidates, NOT the winner!
 				cancelsMu.Lock()
-				for i, c := range cancels {
-					if i != res.index && c != nil {
+				for _, c := range cancels {
+					if c != nil {
 						c()
 					}
 				}
@@ -424,17 +446,27 @@ func (s *Server) dialFastUpstream(parentCtx context.Context, dcID int, isMedia b
 
 				globalBalancer.RecordSuccess(dcID, res.domain)
 
-				// Background drain for excess connections
+				// Deterministic background drain for excess connections
 				go func(winnerIndex int) {
-					timer := time.NewTimer(2 * time.Second)
-					defer timer.Stop()
-					for i := 0; i < len(domains)-1; i++ {
+					done := make(chan struct{})
+					go func() {
+						candidateWg.Wait()
+						close(done)
+					}()
+
+					for {
 						select {
 						case extra := <-resultCh:
 							if extra.index != winnerIndex && extra.ws != nil {
 								_ = extra.ws.Close()
 							}
-						case <-timer.C:
+						case <-done:
+							for len(resultCh) > 0 {
+								extra := <-resultCh
+								if extra.index != winnerIndex && extra.ws != nil {
+									_ = extra.ws.Close()
+								}
+							}
 							return
 						}
 					}

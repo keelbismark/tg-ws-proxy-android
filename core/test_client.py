@@ -1,9 +1,12 @@
+import hashlib
+import hmac
+import logging
+import os
 import socket
 import struct
-import os
 import time
-import hmac
-import hashlib
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 SECRET = bytes.fromhex('d41d8cd98f00b204e9800998ecf8427e')
 
@@ -29,16 +32,16 @@ def build_client_hello():
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.connect(('127.0.0.1', 2443))
 ch, cr, sid = build_client_hello()
-print(f"Sending ClientHello ({len(ch)} bytes)...")
+logging.info("Sending ClientHello (%d bytes)...", len(ch))
 s.sendall(ch)
 
 resp = s.recv(4096)
-print(f"Received ServerHello ({len(resp)} bytes)")
+logging.info("Received ServerHello (%d bytes)", len(resp))
 
 zeroed = bytearray(resp)
 zeroed[11:43] = b'\x00' * 32
 expected = hmac.new(SECRET, cr + bytes(zeroed), hashlib.sha256).digest()
 server_random = resp[11:43]
 
-print(f"Server random matches expected: {server_random == expected}")
+logging.info("Server random matches expected: %s", server_random == expected)
 s.close()

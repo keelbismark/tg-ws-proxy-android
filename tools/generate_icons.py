@@ -1,6 +1,9 @@
-import os
+import logging
 import math
+import os
 from PIL import Image, ImageDraw, ImageFilter
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 def cubic_bezier(p0, p1, p2, p3, steps=40):
     pts = []
@@ -147,7 +150,7 @@ def render_master_icon(size=1080, is_round=False):
     return img
 
 if __name__ == '__main__':
-    print("Generating master icons...")
+    logging.info("Generating master icons...")
     master_square = render_master_icon(size=1080, is_round=False)
     master_round = render_master_icon(size=1080, is_round=True)
 
@@ -173,9 +176,9 @@ if __name__ == '__main__':
         
         rd = master_round.resize((dim, dim), Image.Resampling.LANCZOS)
         rd.save(os.path.join(out_dir, "ic_launcher_round.png"), "PNG")
-        print(f"Generated {folder}: {dim}x{dim}")
+        logging.info("Generated %s: %dx%d", folder, dim, dim)
 
     # Also save 512x512 preview in base android folder for Play Store / repo preview
     preview_sq = master_square.resize((512, 512), Image.Resampling.LANCZOS)
     preview_sq.save(preview_path, "PNG")
-    print(f"Saved 512x512 preview to {preview_path}")
+    logging.info("Saved 512x512 preview to %s", preview_path)

@@ -115,9 +115,9 @@ func WSDomains(dc int, isMedia bool) []string {
 
 // AllUpstreamDomains returns direct domains followed by Cloudflare-proxied gateway domains.
 func AllUpstreamDomains(dc int, isMedia bool, useCF bool) []string {
-	domains := WSDomains(dc, isMedia)
+	direct := WSDomains(dc, isMedia)
 	if !useCF {
-		return domains
+		return direct
 	}
 
 	targetDC := dc
@@ -125,7 +125,11 @@ func AllUpstreamDomains(dc int, isMedia bool, useCF bool) []string {
 		targetDC = 2
 	}
 
-	for _, base := range GetCFDomains() {
+	cfBases := GetCFDomains()
+	domains := make([]string, 0, len(direct)+len(cfBases))
+	domains = append(domains, direct...)
+
+	for _, base := range cfBases {
 		domains = append(domains, fmt.Sprintf("kws%d.%s", targetDC, base))
 	}
 	return domains

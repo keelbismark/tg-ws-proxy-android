@@ -30,11 +30,7 @@ class BootReceiver : BroadcastReceiver() {
                     this.action = TgWsProxyService.ACTION_START
                 }
                 try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        ContextCompat.startForegroundService(context, serviceIntent)
-                    } else {
-                        context.startService(serviceIntent)
-                    }
+                    ContextCompat.startForegroundService(context, serviceIntent)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to start service on boot", e)
                 }
